@@ -8,21 +8,21 @@ const dbName = "foo";
  * When a database is accessed by multiple connections, and one of the
  * processes modifies the database, the SQLite database is locked until that
  * transaction is committed.
+ *
+ * @param {string} db the database name
+ * @returns {sqlite3.Database} the database connection
  */
 function connectToDatabase(db = null) {
   let myDb;
   if (db == null) {
     myDb = ":memory:";
-    console.log("Connecting to in-memory database");
   } else {
     myDb = `${dbName}.db`;
-    console.log(`Connecting to ${dbName} database`);
   }
   const connection = new sqlite3.Database(myDb, (error) => {
     if (error) {
-      return console.error(error.message);
+      throw new Error(error);
     }
-    console.log("Connected to SQLite database");
   });
 
   return connection;
@@ -34,47 +34,89 @@ function connectToDatabase(db = null) {
  * but we are in one of the following situations:
  * 1) there is no connection
  * 2) the connection is closed
+ *
+ * @param {sqlite3.Database} conn the database connection
  */
 function connect(conn) {
   try {
-    conn.execute('SELECT name FROM sqlite_master WHERE type="table";');
+    conn.execute('SELECT name FROM sqlite_temp_master WHERE type="table";');
   } catch (error) {
     conn = connectToDatabase(dbName);
   }
   return conn;
 }
 
+/**
+ * Disconnect from the database.
+ * @param {string} db the database name
+ * @param {sqlite3.Database} conn the database connection
+ */
 function disconnectFromDb(db = null, conn = null) {
   if (db != dbName) {
-    console.log("You are trying to disconnect from a wrong DB");
+    throw new Error("You are trying to disconnect from a wrong DB");
   }
   if (conn != null) {
     conn.close();
   }
 }
 
-function createTable(conn, tableName) {
+/**
+ * Scrub the input string to make it safe to insert into a sqlite database.
+ * @param {string} inputString the input string
+ * @returns {string} the scrubbed string
+ */
+function scrub(inputString) {
+  return inputString
+    .split("")
+    .filter((char) => {
+      return /[a-zA-Z0-9]/.test(char);
+    })
+    .join("");
+}
+
+/**
+ * Create a table in the database.
+ * @param {sqlite3.Database} conn
+ * @param {string} _tableName
+ */
+function createTable(conn, _tableName) {
   connect(conn);
+  const tableName = scrub(_tableName);
   const sql = `CREATE TABLE ${tableName} (rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE, price REAL, quantity INTEGER)`;
   try {
     conn.exec(sql);
   } catch (error) {
-    console.error(error);
+    throw new Error(`Error creating table ${tableName}: ${error}`);
   }
 }
 
+/**
+ * Insert one item into the database.
+ * @param {sqlite3.Database} conn
+ * @param {string} name
+ * @param {number} price
+ * @param {number} quantity
+ * @param {string} tableName
+ */
 function insertOne(conn, name, price, quantity, tableName) {
   connect(conn);
   const sql = `INSERT INTO ${tableName} (name, price, quantity) VALUES (?, ?, ?)`;
   try {
     conn.run(sql, [name, price, quantity]);
-    console.log(`Item ${name} inserted`);
   } catch (error) {
-    console.error(error);
+    throw new Error(
+      `${error}: "${name}" already stored in table "${tableName}"`
+    );
   }
 }
 
+/**
+ * Insert many items into the database.
+ * @param {sqlite3.Database} conn
+ * @param {Array} items
+ * @param {string} tableName
+ */
 function insertMany(conn, items, tableName) {
   connect(conn);
   const sql = `INSERT INTO ${tableName} (name, price, quantity) VALUES (?, ?, ?)`;
@@ -88,29 +130,59 @@ function insertMany(conn, items, tableName) {
   }
   try {
     conn.run(sql, entries);
-    conn.commit();
   } catch (error) {
-    console.error(error);
+    throw new Error(`Error inserting items: ${error}`);
   }
 }
 
+/**
+ * Select one item from the database.
+ * @param {sqlite3.Database} conn
+ * @param {string} itemName
+ * @param {string} tableName
+ */
 function selectOne(conn, itemName, tableName) {
   connect(conn);
-  const sql = `SELECT * FROM ${tableName} WHERE name=${itemName}`;
-  const c = conn.get(sql);
-  const result = c.fetchone();
-  if (result != null) {
-    return result;
-  } else {
-    throw new Error(`Item ${itemName} not found`);
-  }
+  const sql = `SELECT * FROM ${tableName} WHERE name="${itemName}"`;
+  return new Promise((resolve, reject) => {
+    conn.get(sql, (err, row) => {
+      if (err) {
+        reject(new Error(`Error selecting item ${itemName}: ${err}`));
+        return;
+      }
+      resolve(row);
+    });
+  });
 }
 
+/**
+ * Select all items from the database.
+ * @param {sqlite3.Database} conn
+ * @param {string} tableName
+ */
 function selectAll(conn, tableName) {
   connect(conn);
   const sql = `SELECT * FROM ${tableName}`;
-  conn.each(sql, (err, row) => {
-    console.log(`Item ${row.name} selected`);
+
+  return new Promise((resolve, reject) => {
+    const result = [];
+    conn.each(
+      sql,
+      (err, row) => {
+        if (err) {
+          reject(new Error(`Error selecting all items: ${err}`));
+          return;
+        }
+        result.push(row);
+      },
+      (err) => {
+        if (err) {
+          reject(new Error(`Error completing the query: ${err}`));
+          return;
+        }
+        resolve(result);
+      }
+    );
   });
 }
 
@@ -140,14 +212,13 @@ function deleteOne(conn, name, tableName) {
   }
 }
 
-function main() {
-  const tableName = "items";
-  const conn = connectToDatabase();
-  createTable(conn, tableName);
-  insertOne(conn, "apple", 1.0, 10, tableName);
-  insertOne(conn, "banana", 0.5, 20, tableName);
-  insertOne(conn, "orange", 1.5, 15, tableName);
-  selectAll(conn, tableName);
+async function main() {
+  const tableName = "items3";
+  const conn = connectToDatabase(true);
+  //   createTable(conn, tableName);
+  //   insertOne(conn, "foo", 1.0, 10, tableName);
+  //   console.log(await selectOne(conn, "jam", tableName));
+  console.log(await selectAll(conn, tableName));
   conn.close();
 }
 
