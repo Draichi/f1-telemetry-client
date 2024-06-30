@@ -59,10 +59,24 @@ client.on(PACKETS.lapData, (_data) => {
   if (currentLapNumber == _data.m_lapData[0].m_currentLapNum) {
     return;
   }
+
+  const intermediate = {};
+
+  data.forEach((item) => {
+    const frame = item.frame;
+
+    if (!intermediate[frame]) {
+      intermediate[frame] = { frame: frame };
+    }
+
+    Object.assign(intermediate[frame], item);
+  });
+
+  const result = Object.values(intermediate);
   // df = new dfd.DataFrame(data);
   fs.writeFileSync(
-    `./data/lap-${currentLapNumber}-position.json`,
-    JSON.stringify(data),
+    `./data/lapv2-${currentLapNumber}-position.json`,
+    JSON.stringify(result),
     "utf8"
   );
   currentLapNumber = lapData.m_currentLapNum;
